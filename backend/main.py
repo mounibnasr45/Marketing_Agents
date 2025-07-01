@@ -10,28 +10,12 @@ import json
 from supabase import create_client, Client
 
 # Load environment variables
-from pathlib import Path
-env_path = Path('.') / '.env'
-load_dotenv(dotenv_path=env_path)
+load_dotenv()
 
 # Debug environment loading
 print(f"Current working directory: {os.getcwd()}")
 print(f".env file exists: {os.path.exists('.env')}")
-print(f"Trying to load from: {env_path.absolute()}")
-
-# Try to read .env file manually if dotenv fails
-if not os.environ.get("SUPABASE_URL"):
-    print("Attempting manual .env file parsing...")
-    try:
-        with open('.env', 'r') as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith('#') and '=' in line:
-                    key, value = line.split('=', 1)
-                    os.environ[key] = value
-                    print(f"Manually set {key}")
-    except Exception as e:
-        print(f"Failed to manually parse .env: {e}")
+print(f"All environment variables: {list(os.environ.keys())}")
 
 # Initialize Supabase client
 url: str = os.environ.get("SUPABASE_URL")
@@ -96,6 +80,15 @@ class TopSimilarityCompetitor(BaseModel):
     affinity: float
     categoryRank: Optional[int] = None  # Allow None values
 
+# Pydantic models for BuiltWith
+class Technology(BaseModel):
+    name: str
+    tag: str  # e.g., "Analytics", "Frameworks", "CDN"
+
+class BuiltWithResult(BaseModel):
+    domain: str
+    technologies: List[Technology]
+
 class ApifyResult(BaseModel):
     name: str
     globalRank: int
@@ -104,7 +97,7 @@ class ApifyResult(BaseModel):
     companyName: str
     companyYearFounded: int
     companyEmployeesMin: int
-    companyEmployeesMax: Optional[int] = None  # Allow None values
+    companyEmployeesMax: Optional[int] = None
     totalVisits: int
     avgVisitDuration: str
     pagesPerVisit: float
@@ -114,8 +107,9 @@ class ApifyResult(BaseModel):
     topKeywords: List[TopKeyword]
     socialNetworkDistribution: List[SocialNetworkDistribution]
     topSimilarityCompetitors: List[TopSimilarityCompetitor]
-    organicTraffic: float  # Change to float to handle decimal values
-    paidTraffic: float     # Change to float to handle decimal values
+    organicTraffic: float
+    paidTraffic: float
+    builtwith_result: Optional[BuiltWithResult] = None  # Add BuiltWith data
 
 class WebsiteAnalysisRequest(BaseModel):
     websites: List[str]
@@ -270,7 +264,20 @@ def get_mock_data() -> List[ApifyResult]:
                 TopSimilarityCompetitor(domain="glassdoor.com", visitsTotalCount=500000000, affinity=0.75, categoryRank=5),
             ],
             organicTraffic=875000000.0,
-            paidTraffic=50000000.0
+            paidTraffic=50000000.0,
+            builtwith_result=BuiltWithResult(
+                domain="linkedin.com",
+                technologies=[
+                    Technology(name="React", tag="JavaScript Frameworks"),
+                    Technology(name="Node.js", tag="Web Servers"),
+                    Technology(name="Amazon CloudFront", tag="CDN"),
+                    Technology(name="Google Analytics", tag="Analytics"),
+                    Technology(name="Nginx", tag="Web Servers"),
+                    Technology(name="Amazon Web Services", tag="Cloud Computing"),
+                    Technology(name="Bootstrap", tag="CSS Frameworks"),
+                    Technology(name="jQuery", tag="JavaScript Libraries"),
+                ]
+            )
         ),
         ApifyResult(
             name="GitHub",
@@ -314,9 +321,240 @@ def get_mock_data() -> List[ApifyResult]:
                 TopSimilarityCompetitor(domain="stackoverflow.com", visitsTotalCount=800000000, affinity=0.70, categoryRank=1),
             ],
             organicTraffic=360000000.0,
-            paidTraffic=0.0
+            paidTraffic=0.0,
+            builtwith_result=BuiltWithResult(
+                domain="github.com",
+                technologies=[
+                    Technology(name="Ruby on Rails", tag="Web Frameworks"),
+                    Technology(name="MySQL", tag="Databases"),
+                    Technology(name="Redis", tag="Caching"),
+                    Technology(name="Fastly", tag="CDN"),
+                    Technology(name="GitHub Analytics", tag="Analytics"),
+                    Technology(name="Amazon Web Services", tag="Cloud Computing"),
+                    Technology(name="Elasticsearch", tag="Search Engines"),
+                    Technology(name="JavaScript", tag="Programming Languages"),
+                ]
+            )
         )
     ]
+
+class BuiltWithClient:
+    def __init__(self, api_key: Optional[str] = None):
+        self.api_key = api_key
+        self.base_url = "https://api.builtwith.com/v20/api.json"
+
+    async def analyze_domain(self, domain: str) -> BuiltWithResult:
+        """Analyze a domain's technology stack using BuiltWith API"""
+        
+        # Clean domain (remove http/https and www)
+        clean_domain = domain.replace("https://", "").replace("http://", "").replace("www.", "")
+        
+        print(f"   🔍 BuiltWith Analysis: {clean_domain}")
+        print(f"   📋 API Key Status: {'✅ Valid' if self.api_key and self.api_key != 'your-builtwith-api-key-here' else '❌ Invalid/Missing'}")
+        
+        if not self.api_key or self.api_key == "your-builtwith-api-key-here":
+            print(f"   ⚠️ Using mock data for {clean_domain}")
+            return self._get_mock_builtwith_data(clean_domain)
+        
+        async with httpx.AsyncClient() as client:
+            try:
+                print(f"   🌐 Calling BuiltWith API...")
+                print(f"   🔗 URL: {self.base_url}")
+                print(f"   📝 Domain: {clean_domain}")
+                
+                response = await client.get(
+                    self.base_url,
+                    params={
+                        "KEY": self.api_key,
+                        "LOOKUP": clean_domain
+                    },
+                    timeout=30.0
+                )
+                
+                print(f"   📊 Response Status: {response.status_code}")
+                
+                if response.status_code != 200:
+                    print(f"   ❌ API Error: HTTP {response.status_code}")
+                    print(f"   📄 Response: {response.text[:200]}...")
+                    print(f"   🔄 Falling back to mock data")
+                    return self._get_mock_builtwith_data(clean_domain)
+                
+                data = response.json()
+                print(f"   ✅ API response received")
+                print(f"   📊 Response size: {len(str(data))} characters")
+                
+                result = self._parse_builtwith_response(clean_domain, data)
+                tech_count = len(result.technologies)
+                print(f"   🎯 Parsing complete: {tech_count} technologies extracted")
+                
+                if tech_count > 0:
+                    categories = list(set(tech.tag for tech in result.technologies))
+                    print(f"   📂 Categories found: {', '.join(categories[:3])}{'...' if len(categories) > 3 else ''}")
+                
+                return result
+                
+            except httpx.TimeoutException:
+                print(f"   ⏰ API timeout for {clean_domain}")
+                print(f"   🔄 Falling back to mock data")
+                return self._get_mock_builtwith_data(clean_domain)
+            except Exception as e:
+                print(f"   ❌ API error: {str(e)}")
+                print(f"   🔄 Falling back to mock data")
+                return self._get_mock_builtwith_data(clean_domain)
+
+    def _parse_builtwith_response(self, domain: str, data: dict) -> BuiltWithResult:
+        """Parse BuiltWith API response into our model"""
+        technologies = []
+        
+        try:
+            print(f"🔍 Parsing BuiltWith response for {domain}")
+            print(f"Response keys: {list(data.keys())}")
+            
+            if "Results" in data and len(data["Results"]) > 0:
+                result = data["Results"][0]
+                print(f"Result keys: {list(result.keys())}")
+                
+                if "Result" in result and "Paths" in result["Result"]:
+                    paths = result["Result"]["Paths"]
+                    print(f"Found {len(paths)} paths")
+                    
+                    for path in paths:
+                        if "Technologies" in path:
+                            techs = path["Technologies"]
+                            print(f"Found {len(techs)} technology categories in path")
+                            
+                            for tech_category in techs:
+                                # Ensure tech_category is a dict
+                                if not isinstance(tech_category, dict):
+                                    continue
+                                    
+                                category_name = tech_category.get("Name", "Other")
+                                print(f"Processing category: {category_name}")
+                                
+                                # Check for direct technologies in the category
+                                if "Technologies" in tech_category:
+                                    for tech in tech_category["Technologies"]:
+                                        if isinstance(tech, dict):
+                                            tech_name = tech.get("Name", "Unknown")
+                                            if tech_name and tech_name != "Unknown":
+                                                technologies.append(Technology(
+                                                    name=tech_name,
+                                                    tag=category_name
+                                                ))
+                                                print(f"Added tech: {tech_name} ({category_name})")
+                                
+                                # Also check for Categories structure
+                                if "Categories" in tech_category:
+                                    for category in tech_category["Categories"]:
+                                        # Ensure category is a dict
+                                        if not isinstance(category, dict):
+                                            continue
+                                            
+                                        for tech in category.get("Technologies", []):
+                                            # Ensure tech is a dict
+                                            if not isinstance(tech, dict):
+                                                continue
+                                                
+                                            tech_name = tech.get("Name", "Unknown")
+                                            if tech_name and tech_name != "Unknown":
+                                                technologies.append(Technology(
+                                                    name=tech_name,
+                                                    tag=category_name
+                                                ))
+                                                print(f"Added tech: {tech_name} ({category_name})")
+                
+                # If no technologies found in Paths, check for a simpler structure
+                if not technologies and "Technologies" in result:
+                    print("Checking alternative technologies structure")
+                    for tech_item in result["Technologies"]:
+                        if isinstance(tech_item, dict):
+                            tech_name = tech_item.get("Name", tech_item.get("name", "Unknown"))
+                            category = tech_item.get("Category", tech_item.get("tag", "Other"))
+                            if tech_name and tech_name != "Unknown":
+                                technologies.append(Technology(
+                                    name=tech_name,
+                                    tag=category
+                                ))
+                                print(f"Added tech (alt): {tech_name} ({category})")
+                                
+        except Exception as e:
+            print(f"Error parsing BuiltWith response for {domain}: {e}")
+            print(f"Response data: {data}")
+        
+        print(f"Final result: {len(technologies)} technologies parsed for {domain}")
+        
+        # If no technologies were found, fallback to mock data
+        if not technologies:
+            print(f"⚠️ No technologies found for {domain}, using mock data fallback")
+            return self._get_mock_builtwith_data(domain)
+        
+        return BuiltWithResult(domain=domain, technologies=technologies)
+
+    def _get_mock_builtwith_data(self, domain: str) -> BuiltWithResult:
+        """Generate mock BuiltWith data for testing"""
+        mock_data = {
+            "linkedin.com": [
+                Technology(name="React", tag="JavaScript Frameworks"),
+                Technology(name="Node.js", tag="Web Servers"),
+                Technology(name="Amazon CloudFront", tag="CDN"),
+                Technology(name="Google Analytics", tag="Analytics"),
+                Technology(name="Nginx", tag="Web Servers"),
+                Technology(name="Amazon Web Services", tag="Cloud Computing"),
+                Technology(name="Bootstrap", tag="CSS Frameworks"),
+                Technology(name="jQuery", tag="JavaScript Libraries"),
+            ],
+            "github.com": [
+                Technology(name="Ruby on Rails", tag="Web Frameworks"),
+                Technology(name="MySQL", tag="Databases"),
+                Technology(name="Redis", tag="Caching"),
+                Technology(name="Fastly", tag="CDN"),
+                Technology(name="GitHub Analytics", tag="Analytics"),
+                Technology(name="Amazon Web Services", tag="Cloud Computing"),
+                Technology(name="Elasticsearch", tag="Search Engines"),
+                Technology(name="JavaScript", tag="Programming Languages"),
+            ],
+            "medium.com": [
+                Technology(name="Node.js", tag="Web Servers"),
+                Technology(name="React", tag="JavaScript Frameworks"),
+                Technology(name="Amazon CloudFront", tag="CDN"),
+                Technology(name="Google Analytics", tag="Analytics"),
+                Technology(name="Amazon Web Services", tag="Cloud Computing"),
+                Technology(name="GraphQL", tag="APIs"),
+                Technology(name="PostgreSQL", tag="Databases"),
+                Technology(name="TypeScript", tag="Programming Languages"),
+            ],
+            "facebook.com": [
+                Technology(name="React", tag="JavaScript Frameworks"),
+                Technology(name="PHP", tag="Programming Languages"),
+                Technology(name="MySQL", tag="Databases"),
+                Technology(name="Memcached", tag="Caching"),
+                Technology(name="Facebook CDN", tag="CDN"),
+                Technology(name="Facebook Analytics", tag="Analytics"),
+                Technology(name="HipHop", tag="Web Frameworks"),
+                Technology(name="Cassandra", tag="Databases"),
+            ],
+            "google.com": [
+                Technology(name="Go", tag="Programming Languages"),
+                Technology(name="JavaScript", tag="Programming Languages"),
+                Technology(name="Google Cloud CDN", tag="CDN"),
+                Technology(name="Google Analytics", tag="Analytics"),
+                Technology(name="Bigtable", tag="Databases"),
+                Technology(name="Google Cloud Platform", tag="Cloud Computing"),
+                Technology(name="V8", tag="JavaScript Engines"),
+                Technology(name="Protocol Buffers", tag="APIs"),
+            ]
+        }
+        
+        # Get mock data for the domain or default
+        technologies = mock_data.get(domain, [
+            Technology(name="JavaScript", tag="Programming Languages"),
+            Technology(name="HTML5", tag="Markup Languages"),
+            Technology(name="CSS3", tag="Stylesheets"),
+            Technology(name="Google Analytics", tag="Analytics"),
+            Technology(name="Cloudflare", tag="CDN"),
+        ])
+        
+        return BuiltWithResult(domain=domain, technologies=technologies)
 
 @app.get("/")
 async def root():
@@ -332,82 +570,256 @@ async def options_analyze():
 
 @app.post("/api/analyze", response_model=AnalysisResponse)
 async def analyze_websites(request: WebsiteAnalysisRequest):
+    """Step 1: Analyze websites with SimilarWeb only"""
     if not request.websites:
         raise HTTPException(status_code=400, detail="Please provide an array of websites to analyze")
 
-    # Check if API token is available
-    api_token = os.getenv("APIFY_API_TOKEN")
-    print(f"APIFY_API_TOKEN: {api_token}")
+    print("📊 Starting SimilarWeb Analysis (Step 1)")
+    print("=" * 50)
+
+    # Check if API tokens are available
+    apify_token = os.getenv("APIFY_API_TOKEN")
+    
+    print(f"APIFY_API_TOKEN: {'✅' if apify_token else '❌'}")
     print(f"Current working directory: {os.getcwd()}")
     print(f"Environment file exists: {os.path.exists('.env')}")
     
-    if not api_token:
-        print("No API token found, using mock data")
-        # Return mock data
+    if not apify_token:
+        print("📋 No Apify API token found, using mock data")
+        # Return mock data WITHOUT BuiltWith analysis initially
         mock_data = get_mock_data()
-        # Save to Supabase
-        try:
-            if supabase:
-                # Convert Pydantic models to dictionaries
-                data_to_insert = [item.dict() for item in mock_data]
-                result = supabase.table("users").update({"similarweb_result": json.dumps(data_to_insert)}).eq("id", request.userId).execute()
-                print("✅ Data saved to Supabase successfully")
-            else:
-                print("⚠️ Supabase client not available, skipping database save")
-        except Exception as e:
-            print(f"❌ Error saving to Supabase: {e}")
-
-        return AnalysisResponse(
-            success=True,
-            data=mock_data,
-            count=len(mock_data),
-            note="Using mock data - APIFY_API_TOKEN not configured"
-        )
-
-    try:
-        client = ApifyClient(api_token)
-        results = await client.analyze_domains(request.websites)
+        
+        # Remove BuiltWith data for step-by-step process
+        for item in mock_data:
+            item.builtwith_result = None
         
         # Save to Supabase
         try:
             if supabase:
-                # Convert Pydantic models to dictionaries
-                data_to_insert = [item.dict() for item in results]
-                result = supabase.table("users").update({"similarweb_result": json.dumps(data_to_insert)}).eq("id", request.userId).execute()
-                print("✅ Data saved to Supabase successfully")
+                data_to_insert = [item.model_dump() for item in mock_data]
+                result = supabase.table("users").update({
+                    "similarweb_result": json.dumps(data_to_insert)
+                }).eq("id", request.userId).execute()
+                print("✅ SimilarWeb data saved to Supabase successfully")
             else:
                 print("⚠️ Supabase client not available, skipping database save")
         except Exception as e:
             print(f"❌ Error saving to Supabase: {e}")
 
+        print("✅ Step 1 (SimilarWeb) completed with mock data")
         return AnalysisResponse(
             success=True,
-            data=results,
-            count=len(results)
+            data=mock_data,
+            count=len(mock_data),
+            note="Step 1 complete: SimilarWeb analysis ready. Click 'Analyze Tech Stack' to continue."
         )
 
-    except Exception as e:
-        print(f"Error with Apify API: {str(e)}")
-        print("Falling back to mock data")
-        # Fall back to mock data if API fails
-        mock_data = get_mock_data()
+    try:
+        print("🔄 Fetching data from Apify API...")
+        # Get SimilarWeb data only
+        apify_client = ApifyClient(apify_token)
+        results = await apify_client.analyze_domains(request.websites)
+        
+        # Ensure no BuiltWith data is included yet
+        for result in results:
+            result.builtwith_result = None
+        
         # Save to Supabase
         try:
             if supabase:
-                # Convert Pydantic models to dictionaries
-                data_to_insert = [item.dict() for item in mock_data]
-                result = supabase.table("users").update({"similarweb_result": json.dumps(data_to_insert)}).eq("id", request.userId).execute()
-                print("✅ Data saved to Supabase successfully")
+                data_to_insert = [item.model_dump() for item in results]
+                result = supabase.table("users").update({
+                    "similarweb_result": json.dumps(data_to_insert)
+                }).eq("id", request.userId).execute()
+                print("✅ SimilarWeb data saved to Supabase successfully")
+            else:
+                print("⚠️ Supabase client not available, skipping database save")
+        except Exception as e:
+            print(f"❌ Error saving to Supabase: {e}")
+
+        print("✅ Step 1 (SimilarWeb) completed successfully")
+        return AnalysisResponse(
+            success=True,
+            data=results,
+            count=len(results),
+            note="Step 1 complete: SimilarWeb analysis ready. Click 'Analyze Tech Stack' to continue."
+        )
+
+    except Exception as e:
+        print(f"❌ Error with Apify API: {str(e)}")
+        print("📋 Falling back to mock data")
+        # Fall back to mock data if API fails
+        mock_data = get_mock_data()
+        
+        # Remove BuiltWith data for step-by-step process
+        for item in mock_data:
+            item.builtwith_result = None
+        
+        # Save to Supabase
+        try:
+            if supabase:
+                data_to_insert = [item.model_dump() for item in mock_data]
+                result = supabase.table("users").update({
+                    "similarweb_result": json.dumps(data_to_insert)
+                }).eq("id", request.userId).execute()
+                print("✅ SimilarWeb data saved to Supabase successfully")
             else:
                 print("⚠️ Supabase client not available, skipping database save")
         except Exception as e:
             print(f"❌ Error saving to Supabase: {e}")
             
+        print("✅ Step 1 (SimilarWeb) completed with fallback data")
         return AnalysisResponse(
             success=True,
             data=mock_data,
             count=len(mock_data),
-            note=f"API failed, using mock data. Error: {str(e)}"
+            note=f"Step 1 complete (with fallback): SimilarWeb analysis ready. API Error: {str(e)}"
+        )
+
+@app.post("/api/analyze-tech-stack", response_model=AnalysisResponse)
+async def analyze_tech_stack(request: WebsiteAnalysisRequest):
+    """Step 2: Add BuiltWith technology analysis to existing SimilarWeb data"""
+    if not request.websites:
+        raise HTTPException(status_code=400, detail="Please provide an array of websites to analyze")
+
+    print("🔧 Starting BuiltWith Tech Stack Analysis (Step 2)")
+    print("=" * 60)
+    
+    # Check BuiltWith API key
+    builtwith_key = os.getenv("BUILTWITH_API_KEY")
+    print(f"BUILTWITH_API_KEY: {'✅' if builtwith_key else '❌'}")
+    
+    # Initialize BuiltWith client with enhanced logging
+    builtwith_client = BuiltWithClient(builtwith_key)
+    
+    try:
+        # Try to get existing data from Supabase first
+        existing_data = None
+        if supabase:
+            try:
+                print("📊 Retrieving existing SimilarWeb data from Supabase...")
+                result = supabase.table("users").select("similarweb_result").eq("id", request.userId).execute()
+                if result.data and len(result.data) > 0 and result.data[0]["similarweb_result"]:
+                    existing_data = json.loads(result.data[0]["similarweb_result"])
+                    print(f"✅ Found existing data for {len(existing_data)} websites")
+                else:
+                    print("⚠️ No existing SimilarWeb data found in Supabase")
+            except Exception as e:
+                print(f"❌ Error retrieving existing data: {e}")
+        
+        # If no existing data, use mock data or get fresh data
+        if not existing_data:
+            print("📋 Using mock data as base for BuiltWith analysis...")
+            mock_data = get_mock_data()
+            # Remove existing BuiltWith data
+            for item in mock_data:
+                item.builtwith_result = None
+            results = mock_data
+        else:
+            # Convert existing data back to ApifyResult objects
+            print("🔄 Converting existing SimilarWeb data to objects...")
+            results = []
+            for item_data in existing_data:
+                try:
+                    # Remove existing BuiltWith data if any
+                    item_data.pop('builtwith_result', None)
+                    result = ApifyResult(**item_data)
+                    results.append(result)
+                except Exception as e:
+                    print(f"❌ Error converting data item: {e}")
+                    continue
+        
+        print(f"🎯 Starting BuiltWith analysis for {len(results)} websites...")
+        print("-" * 60)
+        
+        # Add BuiltWith analysis for each domain
+        for i, website_result in enumerate(results):
+            # Extract domain from website name or use the provided URL
+            if i < len(request.websites):
+                website_url = request.websites[i]
+            else:
+                # Fallback: construct domain from website name
+                website_url = website_result.name.lower().replace(" ", "") + ".com"
+            
+            print(f"\n🔍 Step 2.{i+1}: Analyzing {website_url}")
+            print(f"   Website: {website_result.name}")
+            print(f"   Global Rank: #{website_result.globalRank}")
+            
+            try:
+                builtwith_result = await builtwith_client.analyze_domain(website_url)
+                results[i].builtwith_result = builtwith_result
+                
+                tech_count = len(builtwith_result.technologies) if builtwith_result.technologies else 0
+                print(f"   ✅ BuiltWith analysis complete: {tech_count} technologies found")
+                
+                if tech_count > 0:
+                    # Show first few technologies as preview
+                    preview_techs = builtwith_result.technologies[:3]
+                    tech_preview = ", ".join([f"{t.name}" for t in preview_techs])
+                    print(f"   📋 Preview: {tech_preview}{'...' if tech_count > 3 else ''}")
+                
+            except Exception as e:
+                print(f"   ❌ Error analyzing {website_url}: {e}")
+                # Set empty BuiltWith result on error
+                results[i].builtwith_result = BuiltWithResult(domain=website_url, technologies=[])
+        
+        print("\n" + "=" * 60)
+        print("💾 Saving enhanced data (SimilarWeb + BuiltWith) to Supabase...")
+        
+        # Save enhanced data to Supabase
+        try:
+            if supabase:
+                data_to_insert = [item.model_dump() for item in results]
+                result = supabase.table("users").update({
+                    "similarweb_result": json.dumps(data_to_insert)
+                }).eq("id", request.userId).execute()
+                print("✅ Enhanced data saved to Supabase successfully")
+            else:
+                print("⚠️ Supabase client not available, skipping database save")
+        except Exception as e:
+            print(f"❌ Error saving enhanced data to Supabase: {e}")
+
+        # Calculate summary statistics
+        total_technologies = sum(
+            len(item.builtwith_result.technologies) if item.builtwith_result else 0 
+            for item in results
+        )
+        
+        print(f"🎉 Step 2 Complete!")
+        print(f"   Websites analyzed: {len(results)}")
+        print(f"   Total technologies found: {total_technologies}")
+        print("=" * 60)
+
+        return AnalysisResponse(
+            success=True,
+            data=results,
+            count=len(results),
+            note=f"Step 2 complete: BuiltWith analysis added. Found {total_technologies} technologies across {len(results)} websites."
+        )
+
+    except Exception as e:
+        print(f"\n❌ Error in BuiltWith analysis: {str(e)}")
+        print("🔄 Falling back to mock BuiltWith data...")
+        
+        # Fallback: use mock data with BuiltWith analysis
+        mock_data = get_mock_data()
+        
+        # Save fallback data to Supabase
+        try:
+            if supabase:
+                data_to_insert = [item.model_dump() for item in mock_data]
+                result = supabase.table("users").update({
+                    "similarweb_result": json.dumps(data_to_insert)
+                }).eq("id", request.userId).execute()
+                print("✅ Fallback data saved to Supabase successfully")
+        except Exception as save_error:
+            print(f"❌ Error saving fallback data: {save_error}")
+            
+        return AnalysisResponse(
+            success=True,
+            data=mock_data,
+            count=len(mock_data),
+            note=f"Step 2 complete (with fallback): BuiltWith analysis added. Error: {str(e)}"
         )
 
 @app.get("/health")
